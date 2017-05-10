@@ -1,9 +1,18 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module React.Docgen.Types
-  ( PropType(..)
+  ( Component(..)
   , Components(..)
-  , Component(..)
-  , Prop(..)
   , DefaultValue(..)
+  , Prop(..)
+  , PropType(..)
+  , componentDescription
+  , componentProps
+  , defaultValueComputed
+  , defaultValueValue
+  , propDefaultValue
+  , propDescription
+  , propType
   , decode
   , decode'
   , eitherDecode
@@ -119,8 +128,8 @@ instance FromJSON Components where
   parseJSON _ = mzero
 
 data Component = Component
-  { componentDescription :: Text
-  , componentProps :: HashMap Text Prop
+  { _componentDescription :: Text
+  , _componentProps :: HashMap Text Prop
   } deriving (Eq, Show)
 
 instance FromJSON Component where
@@ -130,9 +139,9 @@ instance FromJSON Component where
   parseJSON _ = mzero
 
 data Prop = Prop
-  { propType :: PropType
-  , propDescription :: Text
-  , propDefaultValue :: Maybe DefaultValue
+  { _propType :: PropType
+  , _propDescription :: Text
+  , _propDefaultValue :: Maybe DefaultValue
   } deriving (Eq, Show)
 
 instance FromJSON Prop where
@@ -149,11 +158,15 @@ instance FromJSON Prop where
   parseJSON _ = mzero
 
 data DefaultValue = DefaultValue
-  { defaultValueValue :: Value
-  , defaultValueComputed :: Bool
+  { _defaultValueValue :: Value
+  , _defaultValueComputed :: Bool
   } deriving (Eq, Show)
-
 
 instance FromJSON DefaultValue where
   parseJSON (Object o) = DefaultValue <$> o .: "value" <*> o .: "computed"
   parseJSON _ = mzero
+
+$(makeLenses ''Component)
+$(makeLenses ''Prop)
+$(makeLenses ''DefaultValue)
+
