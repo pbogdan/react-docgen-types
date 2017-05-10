@@ -15,13 +15,14 @@ where
 
 import           Protolude
 
+import           Control.Lens hiding ((&))
 import           Control.Monad
 import           Data.Aeson
+import           Data.Aeson.Lens
 import           Data.Aeson.Types
 import           Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
-import qualified Data.Vector as Vec
 
 data PropType
   = TyArray
@@ -30,10 +31,10 @@ data PropType
   | TyNumber
   | TyObject
   | TyString
-  | TySymbol Text -- literal
+  | TySymbol Text
   | TyNode
   | TyElement
-  | TyInstanceOf Text -- Number, Message
+  | TyInstanceOf Text
   | TyEnum [Text]
   | TyUnion [PropType]
   | TyArrayOf PropType
@@ -67,31 +68,20 @@ parsePropType (Object o) = do
       typeValue <- o .: "value"
       return . TyInstanceOf $ typeValue
     String "enum" -> do
-      values <- parseJSON =<< (o .: "value")
-      vals <-
-        case values of
-          Array xs ->
-            Vec.forM xs $ \x ->
-              case x of
-                Object oo -> do
-                  value <- oo .: "value"
-                  case value of
-                    String s -> pure . Text.init . Text.tail $ s
-                    _ -> fail "meh1"
-                _ -> fail "meh2"
-          _ -> fail "meh3"
-      return . TyEnum . Vec.toList $ vals
+      value <- parseJSON =<< (o .: "value") :: Parser Value
+      let vals =
+            value ^.. _Array . traverse . _Object . ix "value" . _String <&>
+            Text.init .
+            Text.tail
+      case vals of
+        [] -> fail "enum value doesn't list any alternatives."
+        _ -> return . TyEnum $ vals
     String "union" -> do
-      values <- parseJSON =<< (o .: "value" <|> o .: "elements")
-      vals <-
-        case values of
-          Array xs ->
-            Vec.forM xs $ \x ->
-              case x of
-                js@(Object _) -> parsePropType js
-                _ -> fail "meh4"
-          _ -> fail "meh5"
-      return . TyUnion . Vec.toList $ vals
+      value <- parseJSON =<< (o .: "value" <|> o .: "elements") :: Parser Value
+      ms <- sequenceA $ value ^.. _Array . traverse . _Value <&> parsePropType
+      case ms of
+        [] -> fail "union value with no members"
+        _ -> return . TyUnion $ ms
     String "arrayOf" -> do
       typeValue <- parsePropType =<< o .: "value"
       return . TyArrayOf $ typeValue
@@ -99,17 +89,19 @@ parsePropType (Object o) = do
       typeValue <- parsePropType =<< o .: "value"
       return . TyObjectOf $ typeValue
     String "shape" -> do
-      typeValue <- parseJSON =<< o .: "value"
-      case typeValue of
-        Object oo -> do
-          subProps <- sequenceA $ HashMap.map parsePropType oo
-          return . TyShape . HashMap.toList $ subProps
-        _ -> fail "meh6"
+      typeValue <- parseJSON =<< o .: "value" :: Parser Value
+      props <-
+        sequenceA . mconcat $ typeValue ^.. _Object . traverse . _Value .
+        _Object <&>
+        HashMap.map parsePropType
+      case HashMap.toList props of
+        [] -> fail "shape with no properties"
+        xs -> return . TyShape $ xs
     String "custom" -> pure TyCustom
     String "Function" -> pure TyFunction
     String "function" -> pure TyFunction
     String "any" -> pure TyAny
-    _ -> fail $ "meh7: " <> show o
+    _ -> fail $ "parsePropType: encountered unknown value: " <> show o
 parsePropType (Array _) = mzero
 parsePropType (String _) = mzero
 parsePropType (Number _) = mzero
@@ -128,7 +120,6 @@ instance FromJSON Components where
 
 data Component = Component
   { componentDescription :: Text
-  -- , componentMethods :: [Text]
   , componentProps :: HashMap Text Prop
   } deriving (Eq, Show)
 
