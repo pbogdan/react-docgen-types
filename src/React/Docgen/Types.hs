@@ -1,3 +1,9 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module React.Docgen.Types
@@ -6,10 +12,17 @@ module React.Docgen.Types
   , DefaultValue(..)
   , Prop(..)
   , PropType(..)
+  , TypeSimple(..)
+  , TypeComplex(..)
+  , (:|:)
+  , catAlts
+  , componentSourceFile
+  , componentName
   , componentDescription
   , componentProps
   , defaultValueComputed
   , defaultValueValue
+  , propName
   , propDefaultValue
   , propDescription
   , propType
@@ -22,140 +35,212 @@ module React.Docgen.Types
   )
 where
 
-import           Protolude
+import           Protolude hiding (sourceFile)
 
 import           Control.Lens hiding ((&))
 import           Control.Monad
 import           Data.Aeson
 import           Data.Aeson.Lens
 import           Data.Aeson.Types
-import           Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Text as Text
+import           System.FilePath.Lens
 
-data PropType
-  = TyArray
-  | TyBool
-  | TyFunc
-  | TyNumber
-  | TyObject
-  | TyString
-  | TySymbol Text
-  | TyNode
-  | TyElement
-  | TyInstanceOf Text
-  | TyEnum [Text]
-  | TyUnion [PropType]
-  | TyArrayOf PropType
-  | TyObjectOf PropType
-  | TyShape [(Text, PropType)]
-  | TyFunction
-  | TyCustom
-  | TyNullable PropType
-  | TyAny
+data a :|: b
+  = AltLeft a
+  | AltRight b
+  deriving (Show, Eq, Ord)
+infixr 5 :|:
+
+catAlts :: [a :|: b] -> [a]
+catAlts ls = [x | AltLeft x <- ls]
+
+data TypeSimple =
+  TypeSimple
   deriving (Eq, Show)
 
-parsePropType :: Value -> Parser PropType
-parsePropType (Object o) = do
-  typeName <- o .: "name"
-  case typeName of
-    String "array" -> pure TyArray
-    String "bool" -> pure TyBool
-    String "boolean" -> pure TyBool
-    String "HiddenProps" -> pure TyBool
-    String "func" -> pure TyFunc
-    String "number" -> pure TyNumber
-    String "object" -> pure TyObject
-    String "string" -> pure TyString
-    String "literal" -> do
-      typeValue <- o .: "value"
-      return (TySymbol typeValue)
-    String "node" -> pure TyNode
-    String "element" -> pure TyElement
-    String "Element" -> pure TyElement
-    String "instanceOf" -> do
-      typeValue <- o .: "value"
-      return . TyInstanceOf $ typeValue
-    String "enum" -> do
-      value <- parseJSON =<< (o .: "value") :: Parser Value
-      let vals =
-            value ^.. _Array . traverse . _Object . ix "value" . _String <&>
-            Text.init .
-            Text.tail
-      case vals of
-        [] -> fail "enum value doesn't list any alternatives."
-        _ -> return . TyEnum $ vals
-    String "union" -> do
-      value <- parseJSON =<< (o .: "value" <|> o .: "elements") :: Parser Value
-      ms <- sequenceA $ value ^.. _Array . traverse . _Value <&> parsePropType
-      case ms of
-        [] -> fail "union value with no members"
-        _ -> return . TyUnion $ ms
-    String "arrayOf" -> do
-      typeValue <- parsePropType =<< o .: "value"
-      return . TyArrayOf $ typeValue
-    String "objectOf" -> do
-      typeValue <- parsePropType =<< o .: "value"
-      return . TyObjectOf $ typeValue
-    String "shape" -> do
-      typeValue <- parseJSON =<< o .: "value" :: Parser Value
-      props <-
-        sequenceA . mconcat $ typeValue ^.. _Object . traverse . _Value .
-        _Object <&>
-        HashMap.map parsePropType
-      case HashMap.toList props of
-        [] -> fail "shape with no properties"
-        xs -> return . TyShape $ xs
-    String "custom" -> pure TyCustom
-    String "Function" -> pure TyFunction
-    String "function" -> pure TyFunction
-    String "any" -> pure TyAny
-    _ -> fail $ "parsePropType: encountered unknown value: " <> show o
-parsePropType (Array _) = mzero
-parsePropType (String _) = mzero
-parsePropType (Number _) = mzero
-parsePropType (Bool _) = mzero
-parsePropType Null = mzero
+data TypeComplex =
+  TypeComplex
+  deriving (Eq, Show)
+
+data PropType a where
+        TyArray :: PropType TypeComplex
+        TyBool :: PropType TypeSimple
+        TyFunc :: PropType TypeComplex
+        TyNumber :: PropType TypeSimple
+        TyObject :: PropType TypeComplex
+        TyString :: PropType TypeSimple
+        TySymbol :: Text -> PropType TypeSimple
+        TyNode :: PropType TypeComplex
+        TyElement :: PropType TypeComplex
+        TyInstanceOf :: Text -> PropType TypeComplex
+        TyEnum :: [Text] -> PropType TypeSimple
+        TyUnion ::
+          [PropType TypeSimple :|: PropType TypeComplex] -> PropType a
+        TyArrayOf :: PropType a -> PropType a
+        TyObjectOf :: PropType a -> PropType a
+        TyShape ::
+          [(Text, PropType TypeSimple :|: PropType TypeComplex)] ->
+            PropType a
+        TyFunction :: PropType TypeComplex
+        TyCustom :: PropType TypeComplex
+        TyNullable :: PropType a -> PropType a
+        TyAny :: PropType TypeComplex
+
+deriving instance Eq a => Eq (PropType a)
+deriving instance Show a => Show (PropType a)
+
+isPropTypeSimple :: PropType TypeSimple :|: PropType TypeComplex -> Bool
+isPropTypeSimple (AltLeft _) = True
+isPropTypeSimple (AltRight _) = False
+
+instance FromJSON (PropType TypeSimple :|: PropType TypeComplex) where
+  parseJSON (Object o) = do
+    typeName <- o .: "name" :: Parser Text
+    case typeName of
+      "array" -> pure . AltRight $ TyArray
+      "bool" -> pure . AltLeft $ TyBool
+      "boolean" -> pure . AltLeft $ TyBool
+      "HiddenProps" -> pure . AltLeft $ TyBool
+      "func" -> pure . AltRight $ TyFunc
+      "number" -> pure . AltLeft $ TyNumber
+      "object" -> pure . AltRight $ TyObject
+      "string" -> pure . AltLeft $ TyString
+      "literal" -> do
+        typeValue <- o .: "value"
+        return . AltLeft $ TySymbol typeValue
+      "node" -> pure . AltRight $ TyNode
+      "element" -> pure . AltRight $ TyElement
+      "Element" -> pure . AltRight $ TyElement
+      "instanceOf" -> do
+        typeValue <- o .: "value"
+        return . AltRight $ TyInstanceOf typeValue
+      "enum" -> do
+        value <- parseJSON =<< o .: "value" :: Parser Value
+        let vals =
+              value ^.. _Array . traverse . _Object . ix "value" . _String <&>
+              Text.init .
+              Text.tail
+        case vals of
+          [] -> fail "enum value doesn't list any alternatives."
+          _ -> return . AltLeft $ TyEnum vals
+      "union" -> do
+        value <-
+          parseJSON =<< (o .: "value" <|> o .: "elements") :: Parser Value
+        ms <- sequenceA $ value ^.. _Array . traverse . _Value <&> parseJSON
+        if getAll . mconcat . map (All . isPropTypeSimple) $ ms
+          then pure . AltRight . TyUnion $ ms
+          else pure . AltLeft . TyUnion $ ms
+      "arrayOf" -> do
+        typeValue <- parseJSON =<< o .: "value"
+        case typeValue of
+          AltLeft l -> pure . AltLeft $ TyArrayOf l
+          AltRight r -> pure . AltRight $ TyArrayOf r
+      "objectOf" -> do
+        typeValue <- parseJSON =<< o .: "value"
+        case typeValue of
+          AltLeft l -> pure . AltLeft $ TyArrayOf l
+          AltRight r -> pure . AltRight $ TyArrayOf r
+      "shape" -> do
+        typeValue <- parseJSON =<< o .: "value" :: Parser Value
+        props <-
+          sequenceA . mconcat $ typeValue ^.. _Object . traverse . _Value .
+          _Object <&>
+          HashMap.map parseJSON
+        if getAll . mconcat . map (All . isPropTypeSimple) $ HashMap.elems props
+          then pure . AltLeft . TyShape $ HashMap.toList props
+          else pure . AltRight . TyShape $ HashMap.toList props
+      "custom" -> pure . AltRight $ TyCustom
+      "Function" -> pure . AltRight $ TyFunction
+      "function" -> pure . AltRight $ TyFunction
+      "any" -> pure . AltRight $ TyAny
+      _ -> fail $ "parsePropType: encountered unknown value: " <> show o
+  parseJSON (Array _) = mzero
+  parseJSON (String _) = mzero
+  parseJSON (Number _) = mzero
+  parseJSON (Bool _) = mzero
+  parseJSON Null = mzero
 
 newtype Components =
-  Components (HashMap Text Component)
+  Components [Component]
   deriving (Eq, Show)
 
 instance FromJSON Components where
   parseJSON (Object o) = do
-    comps <- sequenceA . HashMap.map parseJSON $ o
+    comps <- sequenceA . HashMap.elems . HashMap.mapWithKey parseComponent $ o
     pure . Components $ comps
   parseJSON _ = mzero
 
 data Component = Component
-  { _componentDescription :: Text
-  , _componentProps :: HashMap Text Prop
+  { _componentSourceFile :: Text
+  , _componentName :: Text
+  , _componentDescription :: Text
+  , _componentProps :: [Prop TypeSimple :|: Prop TypeComplex]
   } deriving (Eq, Show)
 
-instance FromJSON Component where
-  parseJSON (Object o) =
-    Component <$> o .: "description" <*>
-    (sequenceA . HashMap.map parseJSON =<< o .: "props")
-  parseJSON _ = mzero
 
-data Prop = Prop
-  { _propType :: PropType
+parseComponent :: Text -> Value -> Parser Component
+parseComponent sourceFile (Object o) = do
+  description <- o .: "description"
+  props <-
+    sequenceA .
+    HashMap.elems .
+    HashMap.mapWithKey
+      (\k v ->
+         (pure . AltLeft =<< parsePropSimple k v) <|>
+         (pure . AltRight =<< parsePropComplex k v)) =<<
+    (o .: "props")
+  return $
+    Component
+      sourceFile
+      (toS . view basename . toS $ sourceFile)
+      description
+      props
+parseComponent _ _ = mzero
+
+data Prop a = Prop
+  { _propName :: Text
+  , _propType :: PropType a
   , _propDescription :: Text
   , _propDefaultValue :: Maybe DefaultValue
   } deriving (Eq, Show)
 
-instance FromJSON Prop where
-  parseJSON (Object o) = do
-    required <- o .: "required" <|> pure False
-    propType_ <-
-      do ret <- parsePropType =<< (o .: "type" <|> o .: "flowType")
-         if required
-           then pure ret
-           else pure . TyNullable $ ret
-    desc <- o .: "description"
-    defValue <- o .:? "defaultValue"
-    return $ Prop propType_ desc defValue
-  parseJSON _ = mzero
+parsePropCommon
+  :: (FromJSON a, FromJSON b)
+  => Object -> Parser (PropType TypeSimple :|: PropType TypeComplex, b, Maybe a)
+parsePropCommon o = do
+  required <- o .: "required" <|> pure False
+  propType_ <-
+    do ret <-
+         parseJSON =<< (o .: "type" <|> o .: "flowType") :: Parser (PropType TypeSimple :|: PropType TypeComplex)
+       case ret of
+         AltLeft l ->
+           if required
+             then pure . AltLeft $ l
+             else pure . AltLeft . TyNullable $ l
+         AltRight r ->
+           if required
+             then pure . AltRight $ r
+             else pure . AltRight . TyNullable $ r
+  desc <- o .: "description"
+  defValue <- o .:? "defaultValue"
+  return (propType_, desc, defValue)
+
+parsePropSimple :: Text -> Value -> Parser (Prop TypeSimple)
+parsePropSimple propName (Object o) = do
+  (propType_, desc, defValue) <- parsePropCommon o
+  case propType_ of
+    AltLeft l -> return $ Prop propName l desc defValue
+    AltRight _ -> mzero
+parsePropSimple _ _ = mzero
+
+parsePropComplex :: Text -> Value -> Parser (Prop TypeComplex)
+parsePropComplex propName (Object o) = do
+  (propType_, desc, defValue) <- parsePropCommon o
+  case propType_ of
+    AltLeft _ -> mzero
+    AltRight r -> return $ Prop propName r desc defValue
+parsePropComplex _ _ = mzero
 
 data DefaultValue = DefaultValue
   { _defaultValueValue :: Value
@@ -169,4 +254,3 @@ instance FromJSON DefaultValue where
 $(makeLenses ''Component)
 $(makeLenses ''Prop)
 $(makeLenses ''DefaultValue)
-
