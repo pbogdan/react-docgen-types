@@ -14,7 +14,7 @@ module React.Docgen.Types
   , PropType(..)
   , TypeSimple(..)
   , TypeComplex(..)
-  , (:|:)
+  , (:|:)(..)
   , altLefts
   , altRights
   , componentSourceFile
