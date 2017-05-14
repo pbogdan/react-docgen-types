@@ -133,8 +133,8 @@ instance FromJSON (PropType TypeSimple :|: PropType TypeComplex) where
           parseJSON =<< (o .: "value" <|> o .: "elements") :: Parser Value
         ms <- sequenceA $ value ^.. _Array . traverse . _Value <&> parseJSON
         if getAll . mconcat . map (All . isPropTypeSimple) $ ms
-          then pure . AltRight . TyUnion $ ms
-          else pure . AltLeft . TyUnion $ ms
+          then pure . AltLeft . TyUnion $ ms
+          else pure . AltRight . TyUnion $ ms
       "arrayOf" -> do
         typeValue <- parseJSON =<< o .: "value"
         case typeValue of
