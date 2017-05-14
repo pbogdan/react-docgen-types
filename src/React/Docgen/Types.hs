@@ -15,7 +15,8 @@ module React.Docgen.Types
   , TypeSimple(..)
   , TypeComplex(..)
   , (:|:)
-  , catAlts
+  , altLefts
+  , altRights
   , componentSourceFile
   , componentName
   , componentDescription
@@ -52,8 +53,11 @@ data a :|: b
   deriving (Show, Eq, Ord)
 infixr 5 :|:
 
-catAlts :: [a :|: b] -> [a]
-catAlts ls = [x | AltLeft x <- ls]
+altLefts :: [a :|: b] -> [a]
+altLefts ls = [x | AltLeft x <- ls]
+
+altRights :: [a :|: b] -> [b]
+altRights ls = [x | AltRight x <- ls]
 
 data TypeSimple =
   TypeSimple
