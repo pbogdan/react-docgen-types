@@ -122,9 +122,7 @@ instance FromJSON (PropType TypeSimple :|: PropType TypeComplex) where
       "enum" -> do
         value <- parseJSON =<< o .: "value" :: Parser Value
         let vals =
-              value ^.. _Array . traverse . _Object . ix "value" . _String <&>
-              Text.init .
-              Text.tail
+              value ^.. _Array . traverse . _Object . ix "value" . _String
         case vals of
           [] -> fail "enum value doesn't list any alternatives."
           _ -> return . AltLeft $ TyEnum vals
