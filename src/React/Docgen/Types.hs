@@ -2,10 +2,11 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators #-}
 
 module React.Docgen.Types
   ( Component(..)
@@ -56,28 +57,37 @@ data a :|: b
 infixr 5 :|:
 
 instance Bifunctor (:|:) where
+  bimap :: (a -> b) -> (c -> d) -> a :|: c -> b :|: d
   bimap f _ (AltLeft a) = AltLeft (f a)
   bimap _ g (AltRight b) = AltRight (g b)
 
 instance Applicative ((:|:) a) where
+  pure :: b -> a :|: b
   pure = AltRight
+  (<*>) :: f :|: (b -> c) -> f :|: b -> f :|: c
   AltLeft e <*> _ = AltLeft e
   AltRight f <*> r = fmap f r
 
 instance Monad ((:|:) a) where
+  (>>=) :: m :|: b -> (b -> m :|: c) -> m :|: c
   AltLeft l >>= _ = AltLeft l
   AltRight r >>= k = k r
 
 instance Foldable ((:|:) a) where
+  foldMap :: Monoid m => (b -> m) -> t :|: b -> m
   foldMap _ (AltLeft _) = mempty
   foldMap f (AltRight y) = f y
+  foldr :: (b -> c -> c) -> c -> t :|: b -> c
   foldr _ z (AltLeft _) = z
   foldr f z (AltRight y) = f y z
+  length :: t :|: b -> Int
   length (AltLeft _) = 0
   length (AltRight _) = 1
+  null :: t :|: b -> Bool
   null = isAltLeft
 
 instance Traversable ((:|:) a) where
+  traverse :: Applicative f => (b -> f c) -> t :|: b -> f (t :|: c)
   traverse _ (AltLeft x) = pure (AltLeft x)
   traverse f (AltRight y) = AltRight <$> f y
 
