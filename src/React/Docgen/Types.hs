@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -15,6 +16,8 @@ module React.Docgen.Types
   , TypeSimple(..)
   , TypeComplex(..)
   , (:|:)(..)
+  , isAltLeft
+  , isAltRight
   , altLefts
   , altRights
   , componentSourceFile
@@ -44,14 +47,46 @@ import           Data.Aeson
 import           Data.Aeson.Lens
 import           Data.Aeson.Types
 import qualified Data.HashMap.Strict as HashMap
-import qualified Data.Text as Text
 import           System.FilePath.Lens
 
 data a :|: b
   = AltLeft a
   | AltRight b
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Functor)
 infixr 5 :|:
+
+instance Bifunctor (:|:) where
+  bimap f _ (AltLeft a) = AltLeft (f a)
+  bimap _ g (AltRight b) = AltRight (g b)
+
+instance Applicative ((:|:) a) where
+  pure = AltRight
+  AltLeft e <*> _ = AltLeft e
+  AltRight f <*> r = fmap f r
+
+instance Monad ((:|:) a) where
+  AltLeft l >>= _ = AltLeft l
+  AltRight r >>= k = k r
+
+instance Foldable ((:|:) a) where
+  foldMap _ (AltLeft _) = mempty
+  foldMap f (AltRight y) = f y
+  foldr _ z (AltLeft _) = z
+  foldr f z (AltRight y) = f y z
+  length (AltLeft _) = 0
+  length (AltRight _) = 1
+  null = isAltLeft
+
+instance Traversable ((:|:) a) where
+  traverse _ (AltLeft x) = pure (AltLeft x)
+  traverse f (AltRight y) = AltRight <$> f y
+
+isAltLeft :: a :|: b -> Bool
+isAltLeft (AltLeft _) = True
+isAltLeft (AltRight _) = False
+
+isAltRight :: a :|: b -> Bool
+isAltRight = not . isAltLeft
 
 altLefts :: [a :|: b] -> [a]
 altLefts ls = [x | AltLeft x <- ls]
@@ -179,7 +214,6 @@ data Component = Component
   , _componentDescription :: Text
   , _componentProps :: [Prop TypeSimple :|: Prop TypeComplex]
   } deriving (Eq, Show)
-
 
 parseComponent :: Text -> Value -> Parser Component
 parseComponent sourceFile (Object o) = do
